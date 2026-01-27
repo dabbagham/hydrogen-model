@@ -1,6 +1,12 @@
 import math
 
 
+def _get_param(parameters, key, default):
+    if parameters is None:
+        return default
+    return parameters.get(key, default)
+
+
 # Annualisation of capex function
 def annualise(capex, interest, lifetime):
     """Annualises the fixed CapEx of an investment. Takes as input the fixed Capex (Eur), interest and lifetime (
@@ -14,18 +20,22 @@ def mc_generation_costs(df_ren, h2_demand, year_diff, capex_extra, capex_h2, lif
                         elec_opex,
                         other_capex_elec, water_cost,
                         capex_wind, opex_wind, capex_solar, opex_factor_solar,
-                        interest=0.08, full_load_hours=2000):
+                        interest=0.08, full_load_hours=2000, parameters=None):
     """Calculates the cost of H2 generation on a yearly and per kg basis. Requires the main dataframe as input.
     Optional inputs are the H2 demand (kt/yr) year (2019 or 2050), electrolyser type (alkaline, SOEC, or other),
     interest rate, and full load hours (hours/yr). """
 
-    wind_efficiency = 0.4  # []
-    blade = 50  # [m]
-    turbine_size = 2  # [MW]
-    comp_elec = 4  # [MWh/ton H2]
+    wind_efficiency = _get_param(parameters, "wind_turbine_efficiency", 0.4)  # []
+    blade = _get_param(parameters, "wind_turbine_blade_size", 50)  # [m]
+    turbine_size = _get_param(parameters, "wind_turbine_size", 2)  # [MW]
+    comp_elec = _get_param(parameters, "compressor_electricity_consumption", 4)  # [MWh/ton H2]
+    wind_lifetime = _get_param(parameters, "wind_turbine_lifetime", 20)  # [years]
+    solar_lifetime = _get_param(parameters, "solar_pv_lifetime", 25)  # [years]
 
     # Determination of solar parameters
-    solar_efficiency = 0.64 + 0.003333 * year_diff  # []
+    solar_efficiency_base = _get_param(parameters, "solar_efficiency_base", 0.64)
+    solar_efficiency_growth = _get_param(parameters, "solar_efficiency_growth_per_year", 0.003333)
+    solar_efficiency = solar_efficiency_base + solar_efficiency_growth * year_diff  # []
 
     lifetime = lifetime_hours / full_load_hours
 
@@ -45,10 +55,10 @@ def mc_generation_costs(df_ren, h2_demand, year_diff, capex_extra, capex_h2, lif
     df_ren['Wind CapEx'] = df_ren['No. of Turbines'] * capex_turbine  # [Eur]
 
     # Get minimum cost location from solar and wind and calculate cost/yr and cost/kWh
-    df_ren['Yearly Cost Solar'] = annualise(df_ren['Solar CapEx'], interest, 25) + opex_factor_solar * df_ren[
+    df_ren['Yearly Cost Solar'] = annualise(df_ren['Solar CapEx'], interest, solar_lifetime) + opex_factor_solar * df_ren[
         'Solar CapEx']  # [Eur/yr]
     df_ren['Yearly Cost Wind'] = annualise(df_ren['Wind CapEx'], interest,
-                                           20) + opex_wind * elec_demand_yearly  # [Eur/yr]
+                                           wind_lifetime) + opex_wind * elec_demand_yearly  # [Eur/yr]
     df_ren['Elec Cost Solar'] = df_ren['Yearly Cost Solar'] / elec_demand_yearly  # [Eur/MWh]
     df_ren['Elec Cost Wind'] = df_ren['Yearly Cost Wind'] / elec_demand_yearly  # [Eur/MWh]
     df_ren['Cheaper source'] = ['Solar' if x < y else 'Wind' for x, y in

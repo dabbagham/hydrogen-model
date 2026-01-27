@@ -1,6 +1,12 @@
 import math
 
 
+def _get_param(parameters, key, default):
+    if parameters is None:
+        return default
+    return parameters.get(key, default)
+
+
 # Annualisation of capex function
 def annualise(capex, interest, lifetime):
     """Annualises the fixed CapEx of an investment. Takes as input the fixed Capex (Eur), interest and lifetime (
@@ -10,20 +16,23 @@ def annualise(capex, interest, lifetime):
     return annualised_capex
 
 
-def generation_costs(df_ren, h2_demand, year=2020, type='alkaline', interest=0.08, full_load_hours=6000):
+def generation_costs(df_ren, h2_demand, year=2020, type='alkaline', interest=0.08, full_load_hours=6000,
+                     parameters=None):
     """Calculates the cost of H2 generation on a yearly and per kg basis. Requires the main dataframe as input.
     Optional inputs are the H2 demand (kt/yr) year (2019 or 2050), electrolyser type (alkaline, SOEC, or other),
     interest rate, and full load hours (hours/yr). """
 
-    opex_factor_solar = 0.015  # []
-    opex_wind = 8  # [Eur/MWh]
-    wind_efficiency = 0.4  # []
-    blade = 50  # [m]
-    turbine_size = 2  # [MW]
-    elec_opex = 0.02  # [% of elec CapEx]
-    comp_elec = 4  # [kWh/kg H2]
-    other_capex_elec = 41.6  # [Eur/kW]
-    water_cost = 0.07  # [Eur/kg H2]
+    opex_factor_solar = _get_param(parameters, "opex_factor_solar", 0.015)  # []
+    opex_wind = _get_param(parameters, "opex_wind", 8)  # [Eur/MWh]
+    wind_efficiency = _get_param(parameters, "wind_turbine_efficiency", 0.4)  # []
+    blade = _get_param(parameters, "wind_turbine_blade_size", 50)  # [m]
+    turbine_size = _get_param(parameters, "wind_turbine_size", 2)  # [MW]
+    elec_opex = _get_param(parameters, "electrolyser_opex_factor", 0.02)  # [% of elec CapEx]
+    comp_elec = _get_param(parameters, "compressor_electricity_consumption", 4)  # [kWh/kg H2]
+    other_capex_elec = _get_param(parameters, "further_capex_costs", 41.6)  # [Eur/kW]
+    water_cost = _get_param(parameters, "electrolyser_water_cost", 0.07)  # [Eur/kg H2]
+    wind_lifetime = _get_param(parameters, "wind_turbine_lifetime", 20)  # [years]
+    solar_lifetime = _get_param(parameters, "solar_pv_lifetime", 25)  # [years]
 
     if 2020 <= year <= 2050:
         year_diff = year - 2020
@@ -34,31 +43,52 @@ def generation_costs(df_ren, h2_demand, year=2020, type='alkaline', interest=0.0
 
     # Determination of wind parameters
 
+    wind_capex_base = _get_param(parameters, "wind_capex_base", 1260)
+    wind_capex_growth_pre_2030 = _get_param(parameters, "wind_capex_growth_pre_2030", -0.0225)
+    wind_capex_growth_post_2030 = _get_param(parameters, "wind_capex_growth_post_2030", -0.0015)
+
     if year <= 2030:
-        capex_wind = 1260 * (0.9775 ** year_diff)   #[Eur/kW]
+        capex_wind = wind_capex_base * ((1 + wind_capex_growth_pre_2030) ** year_diff)   #[Eur/kW]
     else:
-        capex_wind = 1260 * (0.9775 ** 10) * (0.9985 ** (year - 2030))
+        capex_wind = wind_capex_base * ((1 + wind_capex_growth_pre_2030) ** 10) * (
+            (1 + wind_capex_growth_post_2030) ** (year - 2030))
 
     # Determination of solar parameters
-    capex_solar = 700 * (0.9986 ** year_diff)  # [Eur/kWp]
-    solar_efficiency = 0.64 + 0.003333 * year_diff  # []
+    solar_capex_base = _get_param(parameters, "solar_capex_base", 700)
+    solar_capex_growth = _get_param(parameters, "solar_capex_growth_per_year", -0.0014)
+    capex_solar = solar_capex_base * ((1 + solar_capex_growth) ** year_diff)  # [Eur/kWp]
+    solar_efficiency_base = _get_param(parameters, "solar_efficiency_base", 0.64)
+    solar_efficiency_growth = _get_param(parameters, "solar_efficiency_growth_per_year", 0.003333)
+    solar_efficiency = solar_efficiency_base + solar_efficiency_growth * year_diff  # []
 
     # Determination of electrolyser parameters
     if type == 'alkaline':
-        capex_extra = 2.47  # [Eur/kg h2]
-        capex_h2 = 830 * (0.98 ** year_diff) # [Eur/kW]
-        lifetime_hours = 75000 + 1667 * year_diff  # [hours]
-        electrolyser_efficiency = 0.67 + 0.002666 * year_diff  # []
+        capex_extra = _get_param(parameters, "alkaline_capex_extra", 2.47)  # [Eur/kg h2]
+        capex_h2_base = _get_param(parameters, "alkaline_capex_base", 830)
+        capex_growth = _get_param(parameters, "alkaline_capex_growth", -0.02)
+        capex_h2 = capex_h2_base * ((1 + capex_growth) ** year_diff) # [Eur/kW]
+        lifetime_hours = _get_param(parameters, "alkaline_lifetime_hours", 75000) + _get_param(
+            parameters, "alkaline_lifetime_growth_per_year", 1667) * year_diff  # [hours]
+        electrolyser_efficiency = _get_param(parameters, "alkaline_efficiency_base", 0.67) + _get_param(
+            parameters, "alkaline_efficiency_growth_per_year", 0.002666) * year_diff  # []
     elif type == 'SOEC':
-        capex_extra = 2.47  # [Eur/kg h2]
-        capex_h2 = 1131 * (0.98 ** year_diff) # [Eur/kW]
-        lifetime_hours = 20000 + 2167 * year_diff  # [hours]
-        electrolyser_efficiency = 0.77 + 0.002666 * year_diff  # []
+        capex_extra = _get_param(parameters, "soec_capex_extra", 2.47)  # [Eur/kg h2]
+        capex_h2_base = _get_param(parameters, "soec_capex_base", 1131)
+        capex_growth = _get_param(parameters, "soec_capex_growth", -0.02)
+        capex_h2 = capex_h2_base * ((1 + capex_growth) ** year_diff) # [Eur/kW]
+        lifetime_hours = _get_param(parameters, "soec_lifetime_hours", 20000) + _get_param(
+            parameters, "soec_lifetime_growth_per_year", 2167) * year_diff  # [hours]
+        electrolyser_efficiency = _get_param(parameters, "soec_efficiency_base", 0.77) + _get_param(
+            parameters, "soec_efficiency_growth_per_year", 0.002666) * year_diff  # []
     else:
-        capex_extra = 0.91  # [Eur/kg h2]
-        capex_h2 = 994 * (0.98 ** year_diff)  # [Eur/kW]
-        lifetime_hours = 60000 + 2250 * year_diff   # [hours]
-        electrolyser_efficiency = 0.58 + 0.004 * year_diff  # []
+        capex_extra = _get_param(parameters, "pem_capex_extra", 0.91)  # [Eur/kg h2]
+        capex_h2_base = _get_param(parameters, "pem_capex_base", 994)
+        capex_growth = _get_param(parameters, "pem_capex_growth", -0.02)
+        capex_h2 = capex_h2_base * ((1 + capex_growth) ** year_diff)  # [Eur/kW]
+        lifetime_hours = _get_param(parameters, "pem_lifetime_hours", 60000) + _get_param(
+            parameters, "pem_lifetime_growth_per_year", 2250) * year_diff   # [hours]
+        electrolyser_efficiency = _get_param(parameters, "pem_efficiency_base", 0.58) + _get_param(
+            parameters, "pem_efficiency_growth_per_year", 0.004) * year_diff  # []
         # 7% cost reduction per doubling in installed capacity
     lifetime = lifetime_hours / full_load_hours
 
@@ -78,10 +108,10 @@ def generation_costs(df_ren, h2_demand, year=2020, type='alkaline', interest=0.0
     df_ren['Wind CapEx'] = df_ren['No. of Turbines'] * capex_turbine  # [Eur]
 
     # Get minimum cost location from solar and wind and calculate cost/yr and cost/kWh
-    df_ren['Yearly Cost Solar'] = annualise(df_ren['Solar CapEx'], interest, 25) + opex_factor_solar * df_ren[
+    df_ren['Yearly Cost Solar'] = annualise(df_ren['Solar CapEx'], interest, solar_lifetime) + opex_factor_solar * df_ren[
         'Solar CapEx']  # [Eur/yr]
     df_ren['Yearly Cost Wind'] = annualise(df_ren['Wind CapEx'], interest,
-                                           20) + opex_wind * elec_demand_yearly  # [Eur/yr]
+                                           wind_lifetime) + opex_wind * elec_demand_yearly  # [Eur/yr]
     df_ren['Elec Cost Solar'] = df_ren['Yearly Cost Solar'] / elec_demand_yearly  # [Eur/MWh]
     df_ren['Elec Cost Wind'] = df_ren['Yearly Cost Wind'] / elec_demand_yearly  # [Eur/MWh]
     df_ren['Cheaper source'] = ['Solar' if x < y else 'Wind' for x, y in

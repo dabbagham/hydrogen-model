@@ -12,7 +12,7 @@ class MonteCarloComputing:
     def __init__(self, parameter_set):
         self.parameter_set = parameter_set
 
-    def run_mc_model(self):
+    def run_mc_model(self, parameter_overrides=None, deterministic_parameters=None):
         latitude = self.parameter_set.get_lat()
         longitude = self.parameter_set.get_long()
         end_tuple = (latitude, longitude)  # [lat, long]
@@ -30,10 +30,18 @@ class MonteCarloComputing:
 
         start = timeit.default_timer()
 
-        df, total_cost_per_kg_h2, generation_cost_per_kg_h2, solar_cost, wind_cost = self.mc_main(et, h2,
-                                                                                              yr, centralised, pipeline,
-                                                                                              max_pipeline_dist,
-                                                                                              iterations, elec)
+        df, total_cost_per_kg_h2, generation_cost_per_kg_h2, solar_cost, wind_cost = self.mc_main(
+            et,
+            h2,
+            yr,
+            centralised,
+            pipeline,
+            max_pipeline_dist,
+            iterations,
+            elec,
+            parameter_overrides=parameter_overrides,
+            deterministic_parameters=deterministic_parameters,
+        )
 
         newpath = "Results/mc/" + str(round(et[0])) + ',' + str(round(et[1])) + '__' + str(
             yr) + '__' + str(h2) + '__' + elec + '__' + str(pipeline) + '__' + str(iterations)
@@ -61,7 +69,7 @@ class MonteCarloComputing:
         return cheapest_location_df
 
     def mc_main(self, end_plant_tuple, h2_demand, year=2021, centralised=True, pipeline=True, max_pipeline_dist=2000,
-                iterations=1000, elec_type='alkaline'):
+                iterations=1000, elec_type='alkaline', parameter_overrides=None, deterministic_parameters=None):
         """Runs a monte carlo simulation of the model. Takes the desired end location [lat, long], the H2 demand (
         kt/yr), the year, if redistribution is centralised or not, if pipelines are allowed, and the maximum allowed
         pipeline distance (km) as input. Calculates the minimum of (transport + generation) cost for all possible start
@@ -80,7 +88,14 @@ class MonteCarloComputing:
 
         # Define parameters for generation costs
         year_diff, capex_extra, capex_h2, lifetime_hours, electrolyser_efficiency, elec_opex, other_capex_elec, water_cost, \
-        capex_wind, opex_wind, capex_solar, opex_factor_solar = define_gen_parameters(year, iterations, elec_type)
+        capex_wind, opex_wind, capex_solar, opex_factor_solar = define_gen_parameters(
+            year, iterations, elec_type, overrides=parameter_overrides)
+
+        interest = 0.08
+        full_load_hours = 2000
+        if deterministic_parameters:
+            interest = deterministic_parameters.get("discount_rate", interest)
+            full_load_hours = deterministic_parameters.get("full_load_hours", full_load_hours)
 
         for i in range(iterations):
             df, cost_end_nh3[i], cost_end_lohc[i], cost_end_h2_liq[i] = initial_geo_calcs(df, end_plant_tuple,
@@ -89,11 +104,25 @@ class MonteCarloComputing:
                                                                              max_pipeline_dist=max_pipeline_dist)
 
         for i in range(iterations):
-            df = mc_generation_costs(df, h2_demand, year_diff, capex_extra[i], capex_h2[i], lifetime_hours,
-                                     electrolyser_efficiency[i], elec_opex[i],
-                                     other_capex_elec[i], water_cost[i],
-                                     capex_wind[i], opex_wind[i], capex_solar[i], opex_factor_solar[i],
-                                     interest=0.08, full_load_hours=2000)
+            df = mc_generation_costs(
+                df,
+                h2_demand,
+                year_diff,
+                capex_extra[i],
+                capex_h2[i],
+                lifetime_hours,
+                electrolyser_efficiency[i],
+                elec_opex[i],
+                other_capex_elec[i],
+                water_cost[i],
+                capex_wind[i],
+                opex_wind[i],
+                capex_solar[i],
+                opex_factor_solar[i],
+                interest=interest,
+                full_load_hours=full_load_hours,
+                parameters=deterministic_parameters,
+            )
 
             df = mc_transport_costs(df, end_plant_tuple, h2_demand, cost_end_nh3[i], cost_end_lohc[i], cost_end_h2_liq[i],
                                     centralised=centralised, pipeline=pipeline,
