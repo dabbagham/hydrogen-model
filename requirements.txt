@@ -25,6 +25,7 @@ Shapely==1.8.1.post1
 six==1.16.0
 tenacity==8.0.1
 urllib3==1.26.9
+streamlit==1.36.0
 PyQt6~=6.3.1
 Fiona~=1.8.21
 folium==0.12.1.post1
