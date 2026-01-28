@@ -1,5 +1,5 @@
 import sys
-from shapely.geometry import shape
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, shape
 from shapely.ops import unary_union
 import fiona
 import networkx as nx
@@ -28,8 +28,17 @@ class GraphConvertor:
         geoms = [shape(feature['geometry']) for feature in fiona.open(self.input_file)]
         res = unary_union(geoms)
         G = nx.MultiDiGraph()
-        for line in res:
-            for seg_start, seg_end in zip(list(line.coords), list(line.coords)[1:]):
+        lines = []
+        if isinstance(res, LineString):
+            lines = [res]
+        elif isinstance(res, (MultiLineString, GeometryCollection)):
+            lines = [geom for geom in res.geoms if isinstance(geom, LineString)]
+        else:
+            lines = []
+
+        for line in lines:
+            coords = list(line.coords)
+            for seg_start, seg_end in zip(coords, coords[1:]):
                 start = (round(seg_start[1], 6), round(seg_start[0], 6))
                 end = (round(seg_end[1], 6), round(seg_end[0], 6))
                 G.add_edge(start, end, weight=haversine(start, end))
