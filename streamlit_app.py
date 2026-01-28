@@ -1,4 +1,3 @@
-import html
 from pathlib import Path
 
 import pandas as pd
@@ -11,14 +10,9 @@ from streamlit_parameters import DETERMINISTIC_PARAMETERS, MC_PARAMETERS
 DATA_PATH = Path("Data/renewables.csv")
 
 
-def info_icon(reference: str) -> None:
-    safe_reference = html.escape(reference, quote=True)
-    st.markdown(f"<span title='{safe_reference}'>ℹ️</span>", unsafe_allow_html=True)
-
-
-def init_state(key: str, default):
-    if key not in st.session_state:
-        st.session_state[key] = default
+def info_icon(reference: str, key: str) -> None:
+    with st.popover("ℹ️", key=key):
+        st.write(reference)
 
 
 @st.cache_data
@@ -37,18 +31,17 @@ def render_deterministic_parameters():
     parameters = {}
     for param in DETERMINISTIC_PARAMETERS:
         state_key = f"det_{param['key']}"
-        init_state(state_key, param["default"])
         cols = st.columns([5, 2, 1, 1])
         cols[0].write(param["label"])
         parameters[param["key"]] = cols[1].number_input(
             label=param["label"],
-            value=st.session_state[state_key],
+            value=param["default"],
             key=state_key,
             label_visibility="collapsed",
         )
         cols[2].write(param["unit"])
         with cols[3]:
-            info_icon(param["reference"])
+            info_icon(param["reference"], key=f"{state_key}_ref")
     return parameters
 
 
@@ -70,20 +63,18 @@ def render_mc_parameters():
         cols[1].write(param["unit"])
 
         lower_key = f"mc_{param['lower_key']}"
-        init_state(lower_key, param["lower"])
         overrides[param["lower_key"]] = cols[2].number_input(
             label=f"{param['label']} lower",
-            value=st.session_state[lower_key],
+            value=param["lower"],
             key=lower_key,
             label_visibility="collapsed",
         )
 
         if "middle_key" in param:
             middle_key = f"mc_{param['middle_key']}"
-            init_state(middle_key, param["middle"])
             overrides[param["middle_key"]] = cols[3].number_input(
                 label=f"{param['label']} middle",
-                value=st.session_state[middle_key],
+                value=param["middle"],
                 key=middle_key,
                 label_visibility="collapsed",
             )
@@ -91,16 +82,15 @@ def render_mc_parameters():
             cols[3].write("–")
 
         upper_key = f"mc_{param['upper_key']}"
-        init_state(upper_key, param["upper"])
         overrides[param["upper_key"]] = cols[4].number_input(
             label=f"{param['label']} upper",
-            value=st.session_state[upper_key],
+            value=param["upper"],
             key=upper_key,
             label_visibility="collapsed",
         )
         cols[5].write(param["distribution"])
         with cols[6]:
-            info_icon(param["source"])
+            info_icon(param["source"], key=f"{upper_key}_ref")
 
     return overrides
 
@@ -156,9 +146,26 @@ def run_mc_model(parameters, mc_overrides, latitude, longitude, demand, year, el
 def main():
     st.set_page_config(page_title="Hydrogen Cost Model", layout="wide")
     st.title("Hydrogen Cost Model (Streamlit UI)")
+    st.markdown(
+        """
+        Use the inputs in the left sidebar to define the project location and demand, then review or adjust the
+        deterministic assumptions below. Enable Monte Carlo to edit uncertainty ranges and run the stochastic model.
+        """
+    )
+    st.caption(
+        "Tip: Hover/click the ℹ️ icons in the parameter tables to view data sources and references."
+    )
 
     with st.sidebar:
         st.header("Model inputs")
+        st.markdown(
+            """
+            **How to use**
+            - Enter the project **location** (latitude/longitude), **demand**, and **year**.
+            - Choose the **electrolyzer type** and optional **transport assumptions**.
+            - Keep the defaults if you don't want to override model assumptions.
+            """
+        )
         latitude = st.number_input("Latitude", value=0.0)
         longitude = st.number_input("Longitude", value=0.0)
         demand = st.number_input("Yearly hydrogen demand (kilotons)", min_value=0.0, value=0.0, step=10.0)
@@ -178,14 +185,24 @@ def main():
 
         st.divider()
         st.subheader("Monte Carlo")
-        enable_mc = st.checkbox("Run as Monte Carlo simulation")
+        enable_mc = st.toggle(
+            "Run as Monte Carlo simulation",
+            value=False,
+            help="Enable to run stochastic simulations using the Monte Carlo parameter ranges.",
+        )
         iterations = st.number_input("Iterations", min_value=1, value=1000, step=10)
 
     with st.expander("Deterministic parameters (editable)", expanded=True):
+        st.caption("These inputs are always used. Adjust values to override model defaults.")
         parameters = render_deterministic_parameters()
 
     with st.expander("Monte Carlo parameters (editable)", expanded=False):
-        mc_overrides = render_mc_parameters()
+        if enable_mc:
+            st.caption("These ranges are applied only when Monte Carlo simulation is enabled.")
+            mc_overrides = render_mc_parameters()
+        else:
+            st.info("Enable Monte Carlo in the sidebar to edit these uncertainty ranges.")
+            mc_overrides = {}
 
     st.divider()
     run_label = "Run Monte Carlo" if enable_mc else "Run Model"
