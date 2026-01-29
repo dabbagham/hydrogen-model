@@ -4,8 +4,16 @@ from geo_path import *
 def print_basic_results(df):
     """Prints the important results from the input dataframe."""
 
-    min_cost = min(df['Total Cost per kg H2'])
+    valid_costs = df['Total Cost per kg H2'].replace([np.inf, -np.inf], np.nan).dropna()
+    if valid_costs.empty:
+        print("No valid total cost values were computed; check inputs and transport assumptions.")
+        return np.nan, None, None, None, None
+
+    min_cost = valid_costs.min()
     mindex = df.index.values[df['Total Cost per kg H2'] == min_cost]
+    if len(mindex) == 0:
+        print("No matching row found for minimum cost; check for NaN or infinite values.")
+        return min_cost, None, None, None, None
     mindex = mindex[0]
     cheapest_source = (df['Latitude'][mindex], df['Longitude'][mindex])
     cheapest_medium = df['Cheapest Medium'][mindex]
@@ -23,8 +31,16 @@ def print_basic_results(df):
 def get_path(df, end_plant_tuple, centralised, pipeline, max_pipeline_dist):
     """Prints and plots the path of transport taken from the cheapest found solution."""
 
-    min_cost = min(df['Total Cost per kg H2'])
+    valid_costs = df['Total Cost per kg H2'].replace([np.inf, -np.inf], np.nan).dropna()
+    if valid_costs.empty:
+        print("No valid total cost values were computed; unable to build a path.")
+        return None
+
+    min_cost = valid_costs.min()
     mindex = df.index.values[df['Total Cost per kg H2'] == min_cost]
+    if len(mindex) == 0:
+        print("No matching row found for minimum cost; unable to build a path.")
+        return None
     mindex = mindex[0]
 
     df, end_port_tuple = check_port_path(df, end_plant_tuple)

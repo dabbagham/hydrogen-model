@@ -231,7 +231,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     df['H2 Liq Cost'] = np.zeros(len(df))
     df['H2 Gas Cost'] = np.zeros(len(df))
     df['Transport Cost per kg H2'] = np.zeros(len(df))
-    df['Cheapest Medium'] = np.zeros(len(df))
+    df['Cheapest Medium'] = ""
     df['Direct Dist.'] = np.zeros(len(df))
     df['Driving Dist.'] = np.zeros(len(df))
     df['End Plant Latitude'] = end_plant_tuple[0]
