@@ -10,8 +10,8 @@ from streamlit_parameters import DETERMINISTIC_PARAMETERS, MC_PARAMETERS
 DATA_PATH = Path("Data/renewables.csv")
 
 
-def info_icon(reference: str, key: str) -> None:
-    with st.popover("ℹ️", key=key):
+def info_icon(reference: str) -> None:
+    with st.popover("ℹ️"):
         st.write(reference)
 
 
@@ -41,7 +41,7 @@ def render_deterministic_parameters():
         )
         cols[2].write(param["unit"])
         with cols[3]:
-            info_icon(param["reference"], key=f"{state_key}_ref")
+            info_icon(param["reference"])
     return parameters
 
 
@@ -90,7 +90,7 @@ def render_mc_parameters():
         )
         cols[5].write(param["distribution"])
         with cols[6]:
-            info_icon(param["source"], key=f"{upper_key}_ref")
+            info_icon(param["source"])
 
     return overrides
 
