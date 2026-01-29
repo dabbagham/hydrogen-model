@@ -15,6 +15,27 @@ from shapely import speedups
 speedups.disable()
 
 
+def _format_progress(current, total, bar_width=30):
+    if total <= 0:
+        return "[{}] 0%".format("-" * bar_width)
+    ratio = min(max(current / total, 0), 1)
+    filled = int(bar_width * ratio)
+    bar = "#" * filled + "-" * (bar_width - filled)
+    return "[{}] {:>3}% ({}/{})".format(bar, int(ratio * 100), current, total)
+
+
+def _log_progress(stage, current, total, every=250):
+    if current == 0 or current == total or (every and current % every == 0):
+        print(f"{stage} {_format_progress(current, total)}")
+
+
+def _safe_nanmin(values):
+    values = np.array(values, dtype=float)
+    if np.all(np.isnan(values)):
+        return np.nan
+    return np.nanmin(values)
+
+
 def get_driving_distance(start_point, end_point):
     """Gets the driving distance (km) from the start point to the end point (input in [lat, long])."""
 
@@ -85,6 +106,7 @@ def create_shipping_path(df, end_port_tuple):
     """Creates a path between all the starting ports and the end port. Takes about 15-20 minutes. Requires as input the main
     dataframe containing port longitude and latitude and the desired end port location (lat, long)."""
 
+    print("Stage 1/3: Building shipping network from shapefiles...")
     g = create_network()
 
     alpha = 0.1
@@ -96,9 +118,9 @@ def create_shipping_path(df, end_port_tuple):
     shortest_path_obj = ShortestPath(g, alpha, graph_buffer, point_buffer, break_point)
     df['Shipping Dist.'] = np.zeros(len(df))
 
+    print("Stage 2/3: Computing shortest shipping paths for each origin port.")
     for i in range(len(df)):
-        if i == 1000 or i == 2000 or i == 3000 or i == 4000 or i == 5000:
-            print('Iterations complete: ' + str(i) + '/' + str(len(df)))
+        _log_progress("Shipping paths", i, len(df))
         if df.at[i, 'Shipping Dist.'] == 0:
             end_plant_tuple = (df.at[i, 'Port Lat.'], df.at[i, 'Port Long.'])
             df.at[i, 'Shipping Dist.'] = shipping_distance(shortest_path_obj, end_plant_tuple,
@@ -107,6 +129,9 @@ def create_shipping_path(df, end_port_tuple):
             for j in range(len(df)):
                 if df.at[i, 'Port Code'] == df.at[j, 'Port Code']:
                     df.at[j, 'Shipping Dist.'] = df.at[i, 'Shipping Dist.']
+
+    _log_progress("Shipping paths", len(df), len(df))
+    print("Stage 3/3: Shipping path calculation complete.")
 
     return df
 
@@ -148,6 +173,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     Calculates costs for all transport media for both land and sea journeys, as well as for all transport media. For
     land journeys, both direct pipeline and trucking is considered. """
 
+    print("Stage 1/5: Loading or computing shipping distances to the destination port.")
     df, end_port_tuple = check_port_path(df, end_plant_tuple)
 
     # Get straight line distance from end point to end port
@@ -158,6 +184,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         driving_distance_end = np.nan
 
     # Calculate minimum costs from end port to end location for all medium possibilities
+    print("Stage 2/5: Calculating end-port to destination costs for each transport medium.")
     """NH3"""
     nh3_port_to_loc_end_trucking=nh3_trucking_costs(truck_dist=driving_distance_end, convert=False, centralised=centralised)
     nh3_port_to_loc_end_piping=nh3_piping_costs(pipe_dist=direct_distance_end * 1.2, convert=False, centralised=centralised, max_pipeline_dist=max_pipeline_dist)
@@ -170,7 +197,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     else:
         end_nh3_options=[nh3_port_to_loc_end_trucking, h2_gas_port_to_loc_end_trucking]
 
-    cost_end_nh3 = np.nanmin(end_nh3_options)
+    cost_end_nh3 = _safe_nanmin(end_nh3_options)
 
     """LOHC"""
     lohc_port_to_loc_end=lohc_costs(truck_dist=driving_distance_end, convert=False, centralised=centralised)
@@ -180,7 +207,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     else:
         end_lohc_options=[lohc_port_to_loc_end, h2_gas_port_to_loc_end_trucking]
 
-    cost_end_lohc = np.nanmin(end_lohc_options)
+    cost_end_lohc = _safe_nanmin(end_lohc_options)
 
     """liq. H2"""
     h2_liq_port_to_loc_end=h2_liq_costs(truck_dist=driving_distance_end, convert=False, centralised=centralised)
@@ -190,7 +217,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     else:
         end_h2_liq_options = [h2_liq_port_to_loc_end, h2_gas_port_to_loc_end_trucking]
 
-    cost_end_h2_liq = np.nanmin(end_h2_liq_options)
+    cost_end_h2_liq = _safe_nanmin(end_h2_liq_options)
 
     df['NH3 Cost'] = np.zeros(len(df))
     df['LOHC Cost'] = np.zeros(len(df))
@@ -203,11 +230,11 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     df['End Plant Latitude'] = end_plant_tuple[0]
     df['End Plant Longitude'] = end_plant_tuple[1]
 
-    print('Starting final transport calculations...')
+    print("Stage 3/5: Preparing per-origin transport cost calculations.")
+    print("Stage 4/5: Computing per-origin transport costs (this is the longest step).")
 
     for i in range(len(df)):
-        if i == 1000 or i == 2000 or i == 3000 or i == 4000 or i == 5000:
-            print('Iterations complete: ' + str(i) + '/' + str(len(df)))
+        _log_progress("Transport costs", i, len(df))
         direct_distance_total = geopy.distance.distance((df.at[i, 'Latitude'], df.at[i, 'Longitude']),
                                                         end_plant_tuple).km  # Needs [lat, long]
 
@@ -272,15 +299,15 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         else:
             total_nh3_options = [(cost_start_nh3 + cost_shipping_nh3 + cost_end_nh3), nh3_trucking_all_way]
 
-        df.at[i, 'NH3 Cost'] = np.nanmin(total_nh3_options)
+        df.at[i, 'NH3 Cost'] = _safe_nanmin(total_nh3_options)
 
         total_lohc_options = [(cost_start_lohc + cost_shipping_lohc + cost_end_lohc),
                               lohc_costs(truck_dist=driving_distance_total, centralised=centralised)]
-        df.at[i, 'LOHC Cost'] = np.nanmin(total_lohc_options)
+        df.at[i, 'LOHC Cost'] = _safe_nanmin(total_lohc_options)
 
         total_h2_liq_options = [(cost_start_h2_liq + cost_shipping_h2_liq + cost_end_h2_liq),
                                 h2_liq_costs(truck_dist=driving_distance_total, centralised=centralised)]
-        df.at[i, 'H2 Liq Cost'] = np.nanmin(total_h2_liq_options)
+        df.at[i, 'H2 Liq Cost'] = _safe_nanmin(total_h2_liq_options)
 
         h2_gas_trucking_all_way = h2_gas_trucking_costs(truck_dist=driving_distance_total)
         h2_gas_piping_all_way = h2_gas_piping_costs(pipe_dist=direct_distance_total * 1.2, max_pipeline_dist=max_pipeline_dist)
@@ -290,11 +317,11 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         else:
             total_h2_gas_options = [h2_gas_trucking_all_way]
 
-        df.at[i, 'H2 Gas Cost'] = np.nanmin(total_h2_gas_options)
+        df.at[i, 'H2 Gas Cost'] = _safe_nanmin(total_h2_gas_options)
 
         total_total_options = [df.at[i, 'NH3 Cost'], df.at[i, 'LOHC Cost'], df.at[i, 'H2 Liq Cost'],
                                df.at[i, 'H2 Gas Cost']]
-        df.at[i, 'Transport Cost per kg H2'] = np.nanmin(total_total_options)
+        df.at[i, 'Transport Cost per kg H2'] = _safe_nanmin(total_total_options)
 
         # Get overall cheapest medium and therefore lowest transport costs
         transport_costs_dict = {'NH3': df.at[i, 'NH3 Cost'], 'LOHC': df.at[i, 'LOHC Cost'],
@@ -302,6 +329,8 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
                                 'H2 Gas': df.at[i, 'H2 Gas Cost']}
         df.loc[i, 'Cheapest Medium'] = min(transport_costs_dict, key=transport_costs_dict.get)
 
+    _log_progress("Transport costs", len(df), len(df))
+    print("Stage 5/5: Finalizing yearly transport cost totals.")
     df['Yearly Transport Cost'] = df['Transport Cost per kg H2'] * (h2_demand * 1000 * 1000)
 
     return df
