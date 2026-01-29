@@ -1,4 +1,6 @@
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import List
 
 import pandas as pd
 import streamlit as st
@@ -8,6 +10,7 @@ from streamlit_parameters import DETERMINISTIC_PARAMETERS, MC_PARAMETERS
 
 
 DATA_PATH = Path("Data/renewables.csv")
+LOG_LINE_LIMIT = 200
 
 
 def info_icon(reference: str) -> None:
@@ -93,6 +96,28 @@ def render_mc_parameters():
             info_icon(param["source"])
 
     return overrides
+
+
+class StreamlitLogSink:
+    def __init__(self, placeholder: "st.delta_generator.DeltaGenerator", line_limit: int = LOG_LINE_LIMIT) -> None:
+        self._placeholder = placeholder
+        self._line_limit = line_limit
+        self._lines: List[str] = []
+
+    def write(self, message: str) -> int:
+        if not message:
+            return 0
+        for line in message.splitlines():
+            if line.strip() == "":
+                continue
+            self._lines.append(line)
+        if len(self._lines) > self._line_limit:
+            self._lines = self._lines[-self._line_limit :]
+        self._placeholder.code("\n".join(self._lines))
+        return len(message)
+
+    def flush(self) -> None:
+        return None
 
 
 def run_single_model(parameters, latitude, longitude, demand, year, electrolyser_type, centralised, pipeline,
@@ -207,47 +232,57 @@ def main():
     st.divider()
     run_label = "Run Monte Carlo" if enable_mc else "Run Model"
     if st.button(run_label, type="primary"):
-        with st.spinner("Running model..."):
-            if enable_mc:
-                df, total_cost_per_kg_h2, generation_cost_per_kg_h2, solar_cost, wind_cost = run_mc_model(
-                    parameters,
-                    mc_overrides,
-                    latitude,
-                    longitude,
-                    demand,
-                    year,
-                    electrolyser_type,
-                    centralised,
-                    pipeline,
-                    max_pipeline_dist,
-                    iterations,
-                )
-                st.success("Monte Carlo simulation completed.")
-                st.write(df.head())
-                st.write("Total cost per kg H2 (sample)", total_cost_per_kg_h2[:5])
-                st.write("Generation cost per kg H2 (sample)", generation_cost_per_kg_h2[:5])
-                st.write("Solar cost (sample)", solar_cost[:5])
-                st.write("Wind cost (sample)", wind_cost[:5])
-            else:
-                min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path = run_single_model(
-                    parameters,
-                    latitude,
-                    longitude,
-                    demand,
-                    year,
-                    electrolyser_type,
-                    centralised,
-                    pipeline,
-                    max_pipeline_dist,
-                )
-                st.success("Model run completed.")
-                st.markdown("### Results")
-                st.write(f"Index: {mindex}")
-                st.write(f"Minimum cost: {min_cost:.4f} €/kg H₂")
-                st.write(f"Cheapest source: {cheapest_source[0]}, {cheapest_source[1]}")
-                st.write(f"Cheapest medium: {cheapest_medium}")
-                st.write(f"Cheaper electricity: {cheapest_elec}")
-                st.write(f"Final path: {final_path}")
+        st.markdown("### Model run status")
+        st.info(
+            "Live logs below show model stages, warnings, and progress updates. "
+            "If the run appears stalled, check for repeated warnings or missing paths."
+        )
+        log_container = st.expander("Live run log", expanded=True)
+        log_placeholder = log_container.empty()
+        log_sink = StreamlitLogSink(log_placeholder)
+        with st.status("Running model...", expanded=True) as status:
+            with redirect_stdout(log_sink), redirect_stderr(log_sink):
+                if enable_mc:
+                    df, total_cost_per_kg_h2, generation_cost_per_kg_h2, solar_cost, wind_cost = run_mc_model(
+                        parameters,
+                        mc_overrides,
+                        latitude,
+                        longitude,
+                        demand,
+                        year,
+                        electrolyser_type,
+                        centralised,
+                        pipeline,
+                        max_pipeline_dist,
+                        iterations,
+                    )
+                    st.success("Monte Carlo simulation completed.")
+                    st.write(df.head())
+                    st.write("Total cost per kg H2 (sample)", total_cost_per_kg_h2[:5])
+                    st.write("Generation cost per kg H2 (sample)", generation_cost_per_kg_h2[:5])
+                    st.write("Solar cost (sample)", solar_cost[:5])
+                    st.write("Wind cost (sample)", wind_cost[:5])
+                else:
+                    min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path = run_single_model(
+                        parameters,
+                        latitude,
+                        longitude,
+                        demand,
+                        year,
+                        electrolyser_type,
+                        centralised,
+                        pipeline,
+                        max_pipeline_dist,
+                    )
+                    st.success("Model run completed.")
+                    st.markdown("### Results")
+                    st.write(f"Index: {mindex}")
+                    st.write(f"Minimum cost: {min_cost:.4f} €/kg H₂")
+                    st.write(f"Cheapest source: {cheapest_source[0]}, {cheapest_source[1]}")
+                    st.write(f"Cheapest medium: {cheapest_medium}")
+                    st.write(f"Cheaper electricity: {cheapest_elec}")
+                    st.write(f"Final path: {final_path}")
+            status.update(label="Model run completed.", state="complete", expanded=False)
 
 
 if __name__ == "__main__":
