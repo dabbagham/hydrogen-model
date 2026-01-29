@@ -36,19 +36,26 @@ def _safe_nanmin(values):
     return np.nanmin(values)
 
 
-def get_driving_distance(start_point, end_point):
+def get_driving_distance(start_point, end_point, timeout_s=10):
     """Gets the driving distance (km) from the start point to the end point (input in [lat, long])."""
 
-    # call the OSMR API - needs [long, lat]
-    r = requests.get(
-        f"http://router.project-osrm.org/route/v1/car/{end_point[1]},{end_point[0]};{start_point[1]},{start_point[0]}?overview=false""")
-    # then you load the response using the json libray
-    # by default you get only one alternative so you access 0-th element of the `routes`
-    routes = json.loads(r.content)
-    route_1 = routes.get("routes")[0]
-    driving_distance = route_1["distance"] / 1000
-
-    return driving_distance
+    # call the OSRM API - needs [long, lat]
+    try:
+        r = requests.get(
+            f"http://router.project-osrm.org/route/v1/car/{end_point[1]},{end_point[0]};{start_point[1]},{start_point[0]}?overview=false",
+            timeout=timeout_s,
+        )
+        r.raise_for_status()
+        # then you load the response using the json libray
+        # by default you get only one alternative so you access 0-th element of the `routes`
+        routes = json.loads(r.content)
+        route_list = routes.get("routes", [])
+        if not route_list:
+            return np.nan
+        route_1 = route_list[0]
+        return route_1["distance"] / 1000
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return np.nan
 
 
 def create_port_coordinates(df_ports):
@@ -224,7 +231,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
     df['H2 Liq Cost'] = np.zeros(len(df))
     df['H2 Gas Cost'] = np.zeros(len(df))
     df['Transport Cost per kg H2'] = np.zeros(len(df))
-    df['Cheapest Medium'] = np.zeros(len(df))
+    df['Cheapest Medium'] = ""
     df['Direct Dist.'] = np.zeros(len(df))
     df['Driving Dist.'] = np.zeros(len(df))
     df['End Plant Latitude'] = end_plant_tuple[0]
@@ -263,7 +270,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         else:
             start_nh3_options = [nh3_gen_to_port_trucking, h2_gas_gen_to_port_trucking]
 
-        cost_start_nh3 = np.nanmin(start_nh3_options)
+        cost_start_nh3 = _safe_nanmin(start_nh3_options)
 
         """LOHC"""
         lohc_gen_to_port_start = lohc_costs(truck_dist=df.at[i, 'Gen-Port Driving Dist.'], convert=False, centralised=centralised)
@@ -273,7 +280,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         else:
             start_lohc_options = [lohc_gen_to_port_start, h2_gas_gen_to_port_trucking]
 
-        cost_start_lohc = np.nanmin(start_lohc_options)
+        cost_start_lohc = _safe_nanmin(start_lohc_options)
 
         """liq. H2"""
         h2_liq_gen_to_port_start = h2_liq_costs(truck_dist=df.at[i, 'Gen-Port Driving Dist.'], convert=False, centralised=centralised)
@@ -283,7 +290,7 @@ def transport_costs(df, end_plant_tuple, h2_demand, centralised=True, pipeline=T
         else:
             start_h2_liq_options = [h2_liq_gen_to_port_start, h2_gas_gen_to_port_trucking]
 
-        cost_start_h2_liq = np.nanmin(start_h2_liq_options)
+        cost_start_h2_liq = _safe_nanmin(start_h2_liq_options)
 
         # Calculate shipping costs
         cost_shipping_nh3 = nh3_shipping_costs(ship_dist=df.at[i, 'Shipping Dist.'], centralised=centralised)
