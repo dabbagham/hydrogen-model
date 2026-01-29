@@ -1,7 +1,9 @@
 import sys
-from shapely.geometry import GeometryCollection, LineString, MultiLineString, shape
+from pathlib import Path
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, Point, mapping, shape
 from shapely.ops import unary_union
 import fiona
+from fiona.crs import from_epsg
 import networkx as nx
 import geopy.distance
 from haversine import haversine
@@ -67,7 +69,53 @@ class GraphConvertor:
     '''
 
     def create_edges_vertex_shape(self, g):
-        nx.write_shp(g, self.output_dir + '/New Shape/')
+        output_dir = Path(self.output_dir) / 'New Shape'
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        nodes_schema = {
+            'geometry': 'Point',
+            'properties': {'id': 'int'},
+        }
+        edges_schema = {
+            'geometry': 'LineString',
+            'properties': {'id': 'int', 'weight': 'float'},
+        }
+
+        nodes_path = output_dir / 'nodes.shp'
+        edges_path = output_dir / 'edges.shp'
+
+        with fiona.open(
+            nodes_path,
+            'w',
+            driver='ESRI Shapefile',
+            schema=nodes_schema,
+            crs=from_epsg(4326),
+        ) as nodes_shp:
+            for idx, node in enumerate(g.nodes, start=1):
+                nodes_shp.write(
+                    {
+                        'geometry': mapping(Point(node[1], node[0])),
+                        'properties': {'id': idx},
+                    }
+                )
+
+        with fiona.open(
+            edges_path,
+            'w',
+            driver='ESRI Shapefile',
+            schema=edges_schema,
+            crs=from_epsg(4326),
+        ) as edges_shp:
+            for idx, (start, end, data) in enumerate(g.edges(data=True), start=1):
+                weight = float(data.get('weight', 0.0))
+                edges_shp.write(
+                    {
+                        'geometry': mapping(
+                            LineString([(start[1], start[0]), (end[1], end[0])])
+                        ),
+                        'properties': {'id': idx, 'weight': weight},
+                    }
+                )
 
     '''
         @input:     The Graph and the path
