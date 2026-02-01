@@ -1,15 +1,20 @@
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+import time
 from typing import List
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import numpy as np
 
 from generation_costs import generation_costs
 from streamlit_parameters import DETERMINISTIC_PARAMETERS, MC_PARAMETERS
 
 
 DATA_PATH = Path("Data/renewables.csv")
+LOCATIONS_PATH = Path("Data/locationslist.csv")
 LOG_LINE_LIMIT = 200
 
 
@@ -21,6 +26,172 @@ def info_icon(reference: str) -> None:
 @st.cache_data
 def load_renewables_data():
     return pd.read_csv(DATA_PATH, index_col=0)
+
+
+@st.cache_data
+def load_distribution_nodes():
+    if not LOCATIONS_PATH.exists():
+        return pd.DataFrame()
+    return pd.read_csv(LOCATIONS_PATH)
+
+
+def render_results_table(df: pd.DataFrame, label: str) -> None:
+    st.subheader(label)
+    st.dataframe(df, use_container_width=True)
+    st.download_button(
+        label=f"Download {label} (CSV)",
+        data=df.to_csv(index=False),
+        file_name=f"{label.replace(' ', '_').lower()}.csv",
+        mime="text/csv",
+    )
+
+
+def render_cost_map(
+    df: pd.DataFrame,
+    metric: str,
+    end_point: tuple,
+    cheapest_source: tuple | None,
+    distribution_nodes: pd.DataFrame,
+    show_nodes: bool,
+    show_demand: bool,
+    show_cheapest: bool,
+):
+    is_numeric = pd.api.types.is_numeric_dtype(df[metric])
+    fig = px.scatter_geo(
+        df,
+        lat="Latitude",
+        lon="Longitude",
+        color=metric,
+        color_continuous_scale="Viridis" if is_numeric else None,
+        hover_name="Region" if "Region" in df.columns else None,
+        title=f"{metric} (global heatmap)",
+        height=520,
+    )
+    fig.update_traces(marker=dict(size=4, opacity=0.8))
+    fig.update_layout(
+        geo=dict(
+            showland=True,
+            landcolor="rgb(229, 229, 229)",
+            showcountries=True,
+            countrycolor="rgb(255, 255, 255)",
+            showlakes=True,
+            lakecolor="rgb(255, 255, 255)",
+        )
+    )
+
+    if show_nodes and not distribution_nodes.empty:
+        fig.add_trace(
+            go.Scattergeo(
+                lat=distribution_nodes["Latitude"],
+                lon=distribution_nodes["Longitude"],
+                mode="markers",
+                marker=dict(size=3, color="rgba(50, 50, 50, 0.35)"),
+                name="Distribution nodes",
+            )
+        )
+
+    if show_demand:
+        fig.add_trace(
+            go.Scattergeo(
+                lat=[end_point[0]],
+                lon=[end_point[1]],
+                mode="markers",
+                marker=dict(size=10, color="#e45756", symbol="star"),
+                name="Demand location",
+            )
+        )
+
+    if show_cheapest and cheapest_source:
+        fig.add_trace(
+            go.Scattergeo(
+                lat=[cheapest_source[0]],
+                lon=[cheapest_source[1]],
+                mode="markers",
+                marker=dict(size=9, color="#54a24b", symbol="diamond"),
+                name="Cheapest source",
+            )
+        )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_top_locations(df: pd.DataFrame) -> None:
+    st.subheader("Top locations")
+    candidate_metrics = [
+        "Total Cost per kg H2",
+        "Gen. cost per kg H2",
+        "Transport Cost per kg H2",
+        "Total Yearly Cost",
+        "Yearly gen. cost",
+        "Yearly Transport Cost",
+    ]
+    available_metrics = [metric for metric in candidate_metrics if metric in df.columns]
+    if not available_metrics:
+        st.info("No numeric cost metrics available for ranking.")
+        return
+
+    metric = st.selectbox("Rank by", available_metrics, key="top_locations_metric")
+    top_n = st.slider("Number of locations", min_value=5, max_value=200, value=25, step=5)
+
+    top_df = df.nsmallest(top_n, metric)
+    display_columns = [
+        "Latitude",
+        "Longitude",
+        "Total Cost per kg H2",
+        "Gen. cost per kg H2",
+        "Transport Cost per kg H2",
+        "Cheapest Medium",
+        "Cheaper source",
+    ]
+    display_columns = [col for col in display_columns if col in top_df.columns]
+    render_results_table(top_df[display_columns], f"Top {top_n} by {metric}")
+
+
+def render_mc_distribution_charts(
+    total_cost_per_kg_h2: np.ndarray,
+    generation_cost_per_kg_h2: np.ndarray,
+    solar_cost: np.ndarray,
+    wind_cost: np.ndarray,
+) -> None:
+    st.subheader("Monte Carlo cost distributions")
+    sample_size = st.slider(
+        "Samples per distribution",
+        min_value=1000,
+        max_value=100000,
+        value=20000,
+        step=1000,
+    )
+
+    def sample_array(array: np.ndarray) -> np.ndarray:
+        flat = array.ravel()
+        if len(flat) <= sample_size:
+            return flat
+        indices = np.random.choice(len(flat), size=sample_size, replace=False)
+        return flat[indices]
+
+    charts = {
+        "Total cost per kg H2": sample_array(total_cost_per_kg_h2),
+        "Generation cost per kg H2": sample_array(generation_cost_per_kg_h2),
+        "Solar cost": sample_array(solar_cost),
+        "Wind cost": sample_array(wind_cost),
+    }
+
+    for title, values in charts.items():
+        series = pd.Series(values).dropna()
+        if series.empty:
+            st.info(f"No data available for {title}.")
+            continue
+        fig = px.histogram(series, nbins=60, title=title)
+        fig.update_layout(xaxis_title="Cost (€/kg H₂)", yaxis_title="Frequency")
+        st.plotly_chart(fig, use_container_width=True)
+        stats = {
+            "mean": series.mean(),
+            "p50": series.quantile(0.5),
+            "p95": series.quantile(0.95),
+        }
+        st.caption(
+            f"Mean: {stats['mean']:.3f} | Median: {stats['p50']:.3f} | 95th percentile: {stats['p95']:.3f}"
+        )
 
 
 def render_deterministic_parameters():
@@ -147,7 +318,7 @@ def run_single_model(parameters, latitude, longitude, demand, year, electrolyser
     df.to_csv("Results/final_df.csv")
     min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec = print_basic_results(df)
     final_path = get_path(df, (latitude, longitude), centralised, pipeline, max_pipeline_dist)
-    return min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path
+    return df, min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path
 
 
 def run_mc_model(parameters, mc_overrides, latitude, longitude, demand, year, electrolyser_type, centralised, pipeline,
@@ -242,6 +413,7 @@ def main():
         log_sink = StreamlitLogSink(log_placeholder)
         with st.status("Running model...", expanded=True) as status:
             with redirect_stdout(log_sink), redirect_stderr(log_sink):
+                start_time = time.perf_counter()
                 if enable_mc:
                     df, total_cost_per_kg_h2, generation_cost_per_kg_h2, solar_cost, wind_cost = run_mc_model(
                         parameters,
@@ -256,14 +428,24 @@ def main():
                         max_pipeline_dist,
                         iterations,
                     )
+                    runtime = time.perf_counter() - start_time
                     st.success("Monte Carlo simulation completed.")
-                    st.write(df.head())
-                    st.write("Total cost per kg H2 (sample)", total_cost_per_kg_h2[:5])
-                    st.write("Generation cost per kg H2 (sample)", generation_cost_per_kg_h2[:5])
-                    st.write("Solar cost (sample)", solar_cost[:5])
-                    st.write("Wind cost (sample)", wind_cost[:5])
+                    st.metric("Run time (seconds)", f"{runtime:.2f}")
+
+                    render_results_table(df, "Cheapest location summary")
+                    with st.expander("Cost distribution samples", expanded=False):
+                        st.write("Total cost per kg H2 (sample)", total_cost_per_kg_h2[:5])
+                        st.write("Generation cost per kg H2 (sample)", generation_cost_per_kg_h2[:5])
+                        st.write("Solar cost (sample)", solar_cost[:5])
+                        st.write("Wind cost (sample)", wind_cost[:5])
+                    render_mc_distribution_charts(
+                        total_cost_per_kg_h2,
+                        generation_cost_per_kg_h2,
+                        solar_cost,
+                        wind_cost,
+                    )
                 else:
-                    min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path = run_single_model(
+                    df, min_cost, mindex, cheapest_source, cheapest_medium, cheapest_elec, final_path = run_single_model(
                         parameters,
                         latitude,
                         longitude,
@@ -274,14 +456,65 @@ def main():
                         pipeline,
                         max_pipeline_dist,
                     )
+                    runtime = time.perf_counter() - start_time
                     st.success("Model run completed.")
+                    st.metric("Run time (seconds)", f"{runtime:.2f}")
                     st.markdown("### Results")
-                    st.write(f"Index: {mindex}")
-                    st.write(f"Minimum cost: {min_cost:.4f} €/kg H₂")
-                    st.write(f"Cheapest source: {cheapest_source[0]}, {cheapest_source[1]}")
-                    st.write(f"Cheapest medium: {cheapest_medium}")
-                    st.write(f"Cheaper electricity: {cheapest_elec}")
-                    st.write(f"Final path: {final_path}")
+                    if mindex is None or cheapest_source is None:
+                        st.warning(
+                            "No valid minimum cost was found. Check inputs, transport assumptions, or missing data."
+                        )
+                    else:
+                        st.write(f"Index: {mindex}")
+                        st.write(f"Minimum cost: {min_cost:.4f} €/kg H₂")
+                        st.write(f"Cheapest source: {cheapest_source[0]}, {cheapest_source[1]}")
+                        st.write(f"Cheapest medium: {cheapest_medium}")
+                        st.write(f"Cheaper electricity: {cheapest_elec}")
+                        st.write(f"Final path: {final_path}")
+
+                    render_results_table(df, "Final results")
+                    with st.expander("Top locations", expanded=False):
+                        render_top_locations(df)
+
+                    st.subheader("Interactive cost heatmap")
+                    metric = st.selectbox(
+                        "Metric",
+                        [
+                            "Total Cost per kg H2",
+                            "Gen. cost per kg H2",
+                            "Transport Cost per kg H2",
+                            "Cheapest Medium",
+                        ],
+                    )
+                    map_scope = st.radio(
+                        "Map scope",
+                        ["All locations", "Top locations"],
+                        horizontal=True,
+                    )
+                    show_nodes = st.checkbox("Show distribution nodes", value=True)
+                    show_demand = st.checkbox("Show demand marker", value=True)
+                    show_cheapest = st.checkbox("Show cheapest source marker", value=True)
+                    map_df = df
+                    if map_scope == "Top locations":
+                        numeric_metrics = [
+                            "Total Cost per kg H2",
+                            "Gen. cost per kg H2",
+                            "Transport Cost per kg H2",
+                        ]
+                        map_metric = metric if metric in numeric_metrics else "Total Cost per kg H2"
+                        map_top_n = st.slider("Map top N", min_value=50, max_value=1000, value=250, step=50)
+                        map_df = df.nsmallest(map_top_n, map_metric)
+                    distribution_nodes = load_distribution_nodes()
+                    render_cost_map(
+                        map_df,
+                        metric,
+                        (latitude, longitude),
+                        cheapest_source,
+                        distribution_nodes,
+                        show_nodes,
+                        show_demand,
+                        show_cheapest,
+                    )
             status.update(label="Model run completed.", state="complete", expanded=False)
 
 
