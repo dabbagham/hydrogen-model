@@ -391,6 +391,116 @@ def run_mc_model(parameters, mc_overrides, latitude, longitude, demand, year, el
     )
 
 
+def render_detailed_methodology():
+    """
+    Renders the detailed mathematical framework and equations
+    based on Collis & Schomäcker (2022).
+    """
+    with st.expander("Click here for Detailed Mathematical Methodology & Equations"):
+        st.markdown(
+            """
+            ### 1. Hydrogen Production Modeling
+            The model calculates the Levelized Cost of Hydrogen (LCOH) by first sizing the electrolyzer system based on
+            user demand and efficiency constraints.
+
+            **Electrolyzer Capacity ($S$)**
+            The required electrolyzer capacity is derived from the hourly hydrogen demand ($F$) and the electrolyzer
+            efficiency ($\\eta_E$):
+            """
+        )
+        st.latex(r"S = \frac{39 \cdot F}{\eta_E} \quad \text{[MW]}")
+        st.markdown(
+            """
+            *Where:*
+            * $39$ is the specific energy consumption of hydrogen (kWh/kg) at 100% efficiency.
+            * $F$ is the hydrogen demand in tons/hour (derived from annual demand).
+            * $\\eta_E$ is the electrolyzer system efficiency (typically 0.60–0.70 for PEM/Alkaline).
+            """
+        )
+
+        st.markdown(
+            """
+            **Total Energy Requirement ($E_R$)**
+            The total power requirement includes both the electrolysis process and the compression required for storage
+            or transport:
+            """
+        )
+        st.latex(r"E_R = S + C \quad \text{[MW]}")
+        st.markdown(r"*Where $C$ represents the electricity consumption for compression (approx. 4 MWh/ton $H_2$).*")
+
+        st.markdown("---")
+
+        st.markdown(
+            """
+            ### 2. Levelized Cost of Electricity (LCOE)
+            For every global location (approx. 6,000 points), the model calculates LCOE for both Solar PV and Onshore
+            Wind. The cheaper option is selected as the energy source.
+            """
+        )
+        st.latex(
+            r"LCOE = \frac{\sum_{t=1}^{n} \frac{I_t + M_t}{(1 + r)^t}}{\sum_{t=1}^{n} \frac{E_t}{(1 + r)^t}}"
+        )
+        st.markdown(
+            """
+            * $I_t$: Investment expenditures (CAPEX) in year $t$.
+            * $M_t$: Operations and maintenance expenditures (OPEX) in year $t$.
+            * $E_t$: Electricity generation in year $t$ (derived from local Wind Power Density or Solar Irradiation).
+            * $r$: Discount rate.
+            * $n$: System lifetime.
+            """
+        )
+
+        st.markdown("---")
+
+        st.markdown(
+            """
+            ### 3. Future Cost Projections
+            To simulate scenarios for 2030, 2040, and 2050, the model adjusts cost parameters (CAPEX, efficiency) using
+            exponential learning curves:
+            """
+        )
+        st.latex(r"Var_{year} = Var_{2020} \times (1 + \Delta_{rate})^{(year - 2020)}")
+        st.markdown(
+            """
+            * $Var_{year}$: The parameter value (e.g., Electrolyzer CAPEX) in the target year.
+            * $\\Delta_{rate}$: The assumed annual percentage change (e.g., -2.25% for wind CAPEX).
+            """
+        )
+
+        st.markdown("---")
+
+        st.markdown(
+            """
+            ### 4. Global Transport Logic
+            The model executes a "Shortest Path" algorithm to minimize total delivered cost. For any given production
+            site $i$ and demand location $j$, the Transport Cost ($TC$) is minimized across all modes:
+            """
+        )
+        st.latex(
+            r"""
+            TC_{i,j} = \min \begin{cases}
+            \text{Truck}_{H2}(d_{i,j}) & \text{if } d_{i,j} < 1000 \text{ km} \\
+            \text{Pipeline}_{H2}(d_{i,j}) & \text{if permitted} \\
+            \text{Ship}_{medium}(d_{i \to port} + d_{sea} + d_{port \to j}) & \forall \text{ mediums } (NH_3, LOHC, LH_2)
+            \end{cases}
+            """
+        )
+        st.markdown(
+            """
+            **Shipping Pathway Cost Components:**
+            1.  **Conversion:** Cost to convert $H_2$ gas to medium (e.g., Ammonia).
+            2.  **Export/Import:** Terminal fees and storage.
+            3.  **Shipping:** Function of distance ($d_{sea}$) and fuel costs.
+            4.  **Reconversion:** Cost to crack medium back to $H_2$ gas (if required).
+            """
+        )
+
+        st.caption(
+            "Source: Collis, J., & Schomäcker, R. (2022). Determining the Production and Transport Cost for H2 on a "
+            "Global Scale. *Frontiers in Energy Research*."
+        )
+
+
 def main():
     st.set_page_config(page_title="Hydrogen Cost Model", layout="wide")
     st.title("Hydrogen Cost Model (Streamlit UI)")
@@ -409,8 +519,12 @@ def main():
           to 2020 in the reference study; later decades (2030/2040/2050) reflect forward-looking learning curves and
           cost projections. This keeps comparisons consistent with the paper and allows users to examine trajectories
           relative to a common baseline.
+        - Pipeline options use the paper's levelized €/kg cost curves as a function of distance (with a minimum cost
+          floor up to 400 km and a user-defined maximum distance). These pipeline costs already embed CAPEX and OPEX, so
+          enabling pipelines selects those levelized costs rather than adding a separate pipeline CAPEX line item.
         """
     )
+    render_detailed_methodology()
     st.markdown(
         """
         Use the inputs in the left sidebar to define the project location and demand, then review or adjust the
