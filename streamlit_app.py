@@ -503,7 +503,7 @@ def render_detailed_methodology():
 
 def main():
     st.set_page_config(page_title="Hydrogen Cost Model", layout="wide")
-    st.title("Hydrogen Cost Model (Streamlit UI)")
+    st.title("Hydrogen Production Cost Model")
     st.markdown(
         """
         **Methodology overview**
