@@ -3,3 +3,4 @@
 /Data/port_index.csv
 /plot_results.py
 /dist
+*.pyc
